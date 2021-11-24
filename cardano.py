@@ -35,10 +35,11 @@ import cbor2
 import time
 import logging
 import socket
+import bitstring
+
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 network_magic = 764824073
-# LAST_BYRON_BLOCK = {'slot': 4492799, 'hash': b'f8084c61b6a238acec985b59310b6ecec49c0ab8352249afd7268da5cff2a457'}
-LAST_BYRON_BLOCK = [4492799, b'f8084c61b6a238acec985b59310b6ecec49c0ab8352249afd7268da5cff2a457']
+LAST_BYRON_BLOCKS = [[4492799, bytes.fromhex('F8084C61B6A238ACEC985B59310B6ECEC49C0AB8352249AFD7268DA5CFF2A457')], [1598399, bytes.fromhex('7e16781b40ebf8b6da18f7b5e8ade855d6738095ef2f1c58c77e88b6e45997a4')], [359, bytes.fromhex('9c0fe75b6a0499e9576a09589a5777e7021824e8a6d037065829423f861a9bb6')]]
 
 class Node:
 
@@ -110,24 +111,38 @@ class Node:
         headers['mini_protocol'] = int(mode_mini_protcol[1:], 2)
         return headers
 
-    def add_headers(self, obj):
+    def mode_bit_manipulation(self, protocol_id: int, mode: int):
+        protocol_two_byte_bits = self.convert_bits(protocol_id.to_bytes(2, 'big'))
+        protocol_bitarray = bitstring.BitArray(bin=protocol_two_byte_bits)
+        protocol_binary = protocol_bitarray.bin[1:]
+        mode_binary = bitstring.BitArray(bin=str(mode)).bin
+        mode_mini_protocol_binary = bitstring.BitArray(bin=mode_binary + protocol_binary)
+        return mode_mini_protocol_binary.tobytes()
+
+    def add_headers(self, obj, protocol_id: int, mode: int = 0):
         '''
-        Applies standard Node headers to an object
+        Create the object for verison proposal
+        Time: Monotonic time that increments constantly
+        Mode: 1 or 0, the first bit of the 2 protocol ID bytes
+        Protocol ID: last 15 bits of the protocol ID bytes
+        Length: last two bytes of header representing the length of the payload
         '''
-        # Create the object for verison proposal
-        start_time = int(time.monotonic() * 1000)
-        self.last_response = start_time
-        # Object as CBOR
+        # # Object as CBOR
         cbor_obj = cbor2.dumps(obj)
-        # Time in milliseconds
-        cbor_time = struct.pack('>I', start_time)
-        # Length of payload
-        length = struct.pack('>I', len(cbor_obj))
-        msg = cbor_time + length + cbor_obj
-        logging.debug('Timestamp: ' + str(start_time) + ' ' + cbor2.dumps(cbor_obj).hex())
-        logging.debug('Length: ' + str(len(cbor_obj)) + ' ' + length.hex())
-        logging.debug('Version Options: ' + str(obj) + ' ' + cbor2.dumps(cbor_obj).hex())
-        logging.debug('Constructed Payload: ' + msg.hex())
+        header = dict()
+        # # Time in milliseconds
+        header['time'] = struct.pack('>I', int(time.monotonic() * 1000))
+        header['mode'] = mode # unused but available for reference
+        header['protocol_id'] = str(self.convert_bits(protocol_id.to_bytes(2, 'big')))[:15] # unusued but available for reference
+        # # Mode Mini protocol
+        header['mode_mini_protocol_id'] = self.mode_bit_manipulation(protocol_id, mode)
+        # # Length of payload
+        header['length'] = len(cbor_obj).to_bytes(2, 'big')
+        logging.debug(header)
+        logging.debug('Request Time Binary: ' + self.convert_bits(header['time']))
+        logging.debug('Request Mode Binary: ' + self.convert_bits(header['mode_mini_protocol_id']))
+        logging.debug('Length: ' + self.convert_bits(header['length']))
+        msg = header['time'] + header['mode_mini_protocol_id'] + header['length'] + cbor_obj
         return msg
 
     def handshake(self):
@@ -136,9 +151,11 @@ class Node:
         '''
         # You can propose all of the versions
         obj = [0, {1 : network_magic, 2: network_magic, 3: network_magic, 4: [network_magic, False], 5: [network_magic, False], 6: [network_magic, False], 7: [network_magic, False], 8: [network_magic, False]}]
-        msg = self.add_headers(obj)
+        protocol_id = 0
+        msg = self.add_headers(obj, protocol_id)
         # STATE: PROPOSE
         logging.info('>>> Version Proposal: ' + str(obj))
+        logging.debug('>>> Version Proposal: ' + str(msg))
         self.socket.send(msg)
         data = self.node_response()
         logging.info('<<< Version: ' + str(data))
@@ -147,14 +164,17 @@ class Node:
     def find_intersect(self):
         '''
         Find intersection in blockchain
+        Start from the final blocks within Byron
         '''
         # Create the object for verison proposal
         start_time = int(time.monotonic() * 1000)
         # finds the intersection from the end of Byron
-        obj = [4, LAST_BYRON_BLOCK] # First ever intersect
-        msg = self.add_headers(obj)
+        obj = [4, LAST_BYRON_BLOCKS] # First ever intersect
+        protocol_id = 2
+        msg = self.add_headers(obj, protocol_id)
         # STATE: msgFindIntersect
-        logging.info('>>> Intersection Request: ' + str(msg))
+        logging.info('>>> Intersection Request: ' + str(obj))
+        logging.debug('>>> Intersection Request: ' + str(msg))
         self.socket.send(msg)
         data = self.node_response()
         logging.info('<<< Intersection: ' + str(data))
