@@ -1,0 +1,2 @@
+cbor2>=5.2.0
+bitstring>=3.1.7
