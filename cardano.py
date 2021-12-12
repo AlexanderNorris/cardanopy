@@ -18,12 +18,12 @@ chainHash = genesisHash / blockHash
  headerBodyHash = i n t
 
  p o i n t = o r i g i n / blockHeaderHash
- o r i g i n = [ ]
- blockHeaderHash = [ slotNo , i n t ]
+ origin = [ ]
+ blockHeaderHash = [ slotNo , int ]
  slotNo = word64
 
- t r a n s a c t i o n = i n t
- reje ctRea son = i n t
+ transaction = int
+ reject Reason = int
 
  word16 = 0..65535
  word32 = 0..4294967295
@@ -37,7 +37,7 @@ import logging
 import socket
 import bitstring
 
-logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
+logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 network_magic = 764824073
 LAST_BYRON_BLOCKS = [[4492799, bytes.fromhex('F8084C61B6A238ACEC985B59310B6ECEC49C0AB8352249AFD7268DA5CFF2A457')], [1598399, bytes.fromhex('7e16781b40ebf8b6da18f7b5e8ade855d6738095ef2f1c58c77e88b6e45997a4')], [359, bytes.fromhex('9c0fe75b6a0499e9576a09589a5777e7021824e8a6d037065829423f861a9bb6')]]
 
@@ -161,15 +161,17 @@ class Node:
         logging.info('<<< Version: ' + str(data))
         return
 
-    def find_intersect(self):
+    def find_intersect(self, points: list = []):
         '''
+        Chain-sync protocol
         Find intersection in blockchain
         Start from the final blocks within Byron
         '''
-        # Create the object for verison proposal
-        start_time = int(time.monotonic() * 1000)
         # finds the intersection from the end of Byron
-        obj = [4, LAST_BYRON_BLOCKS] # First ever intersect
+        if points == []:
+            obj = [4, LAST_BYRON_BLOCKS] # First ever intersect
+        else:
+            obj = [4, [points]]
         protocol_id = 2
         msg = self.add_headers(obj, protocol_id)
         # STATE: msgFindIntersect
@@ -178,7 +180,50 @@ class Node:
         self.socket.send(msg)
         data = self.node_response()
         logging.info('<<< Intersection: ' + str(data))
-        return
+        return data
+
+    def msg_request_next(self):
+        '''
+        Chain-symc protocol
+        Perform a MsgRequestNext
+        '''
+        protocol_id = 2
+        obj = [0]
+        msg = self.add_headers(obj, protocol_id)
+        logging.info('>>> Requesting next: ' + str(obj))
+        logging.debug('>>> Requesting next: ' + str(msg))
+        self.socket.send(msg)
+        data = self.node_response()
+        if data[0] == 1:
+            logging.info('<<< MsgAwaitReply: ' + str(data))
+        elif data[0] == 2:
+            logging.info('<<< MsgRollForward: ' + str(data))
+        elif data[0] == 3:
+            logging.info('<<< MsgRollBackward: ' + str(data))
+        elif data[0] == 7:
+            logging.info('<<< MsgDone: Chain-sync complete!')
+        return data
+
+    def save_block(self, block):
+        '''
+        Process and store a block 
+        '''
+        pass
+
+    def chain_sync(self):
+        '''
+        Perform a chain sync to store the full blockchain locally as a sqlite file
+        '''
+        # add a method of picking up where left off
+        self.find_intersect()
+        in_sync = False
+        while in_sync == False:
+            data = self.msg_request_next()
+            self.save_block(data)
+            if data[0] == 7:
+                in_sync = True
+                break
+
 
 class NodeException(Exception):
     def __init__(self):
